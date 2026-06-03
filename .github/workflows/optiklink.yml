@@ -48,10 +48,16 @@ jobs:
             libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 \
             libxfixes3 libxrandr2 libgbm1 \
             libasound2t64 || sudo apt-get install -y -qq libasound2
+          # v4.6: 录屏依赖 — scrot 截图 + imagemagick (import) + ffmpeg (合成)
+          sudo apt-get install -y -qq \
+            scrot imagemagick ffmpeg \
+            || echo "部分录屏依赖安装失败，将自动降级"
 
       - name: 安装 Python 依赖
         run: |
           pip install "cloakbrowser[geoip]"
+          # v4.6: Pillow 作为 GIF 合成的后备方案
+          pip install Pillow
           python -c "from cloakbrowser import ensure_binary; ensure_binary()"
 
       - name: 下载并启动 Xray 代理
@@ -90,6 +96,7 @@ jobs:
           GALLIUM_DRIVER:   "llvmpipe"
         run: timeout 300 python optiklink_cloakbrowser.py
 
+      # v4.6: 改为 always() 确保失败时也能上传
       - name: 上传截图（仅截图模式或失败时）
         if: always()
         uses: actions/upload-artifact@v4
