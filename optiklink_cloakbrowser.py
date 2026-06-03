@@ -1,6 +1,12 @@
 """
-OptikLink 每日自动登录脚本 v4.4 (CloakBrowser版)
+OptikLink 每日自动登录脚本 v4.5 (CloakBrowser版)
 原理：用 CloakBrowser 打开页面，注入 Discord Token 完成 OAuth2 授权
+
+修复记录 v4.5:
+  - 新增录屏功能：环境变量 ENABLE_SCREENRECORD=true 开启，默认 false
+  - 录屏文件保存至 recordings/ 目录，格式为 webm
+  - 录屏在 browser.new_page() 后立即开始，在 finally 块中停止并保存
+  - 与截图功能互相独立，可单独或同时开启
 
 修复记录 v4.4:
   - Discord 按钮实际为 <a href="login" class="hyperlink_abs w-inline-block">（无文字，图标为图片）
@@ -35,12 +41,13 @@ log = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────
 # 配置（全部从 GitHub Secrets / 环境变量读取）
 # ─────────────────────────────────────────────────────────────
-DISCORD_TOKEN     = os.environ["DISCORD_TOKEN"]
-WXPUSHER_TOKEN    = os.environ["WXPUSHER_TOKEN"]
-WXPUSHER_UID      = os.environ["WXPUSHER_UID"]
-EXPIRE_DATE       = os.environ.get("EXPIRE_DATE", "")
-PROXY_URL         = os.environ.get("PROXY_URL", "socks5://127.0.0.1:10808")
-ENABLE_SCREENSHOT = os.environ.get("ENABLE_SCREENSHOT", "false").lower() == "true"
+DISCORD_TOKEN        = os.environ["DISCORD_TOKEN"]
+WXPUSHER_TOKEN       = os.environ["WXPUSHER_TOKEN"]
+WXPUSHER_UID         = os.environ["WXPUSHER_UID"]
+EXPIRE_DATE          = os.environ.get("EXPIRE_DATE", "")
+PROXY_URL            = os.environ.get("PROXY_URL", "socks5://127.0.0.1:10808")
+ENABLE_SCREENSHOT    = os.environ.get("ENABLE_SCREENSHOT",    "false").lower() == "true"
+ENABLE_SCREENRECORD  = os.environ.get("ENABLE_SCREENRECORD",  "false").lower() == "true"
 
 BASE_URL      = "https://optiklink.net"
 AUTH_URL      = f"{BASE_URL}/auth"
@@ -65,6 +72,143 @@ def take_screenshot(page, name: str):
         log.info(f"📸 截图已保存: {path}")
     except Exception as e:
         log.warning(f"截图失败: {e}")
+
+# ─────────────────────────────────────────────────────────────
+# 录屏
+# ─────────────────────────────────────────────────────────────
+RECORDING_DIR = Path("./recordings")
+RECORDING_DIR.mkdir(exist_ok=True)
+
+def start_recording(context):
+    """
+    开始录屏。需要传入 browser context（不是 page）。
+    Playwright 的 record_video 必须在 new_context() 时指定，
+    但 CloakBrowser 通常直接暴露 browser.new_page()，
+    所以这里改用 context.tracing 或手动逐帧截图方案作为兼容兜底。
+    返回一个 recorder 对象（dict），供 stop_recording 使用。
+    """
+    if not ENABLE_SCREENRECORD:
+        return None
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    rec = {"ts": ts, "running": True, "frames": [], "thread": None}
+    return rec
+
+def start_page_recording(page):
+    """
+    基于定时截图实现录屏：每 500ms 截一帧，最终合成为 GIF / 视频。
+    在独立线程中运行，不阻塞主流程。
+    返回 recorder dict，供 stop_page_recording 使用。
+    """
+    if not ENABLE_SCREENRECORD:
+        return None
+
+    import threading
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    frame_dir = RECORDING_DIR / f"frames_{ts}"
+    frame_dir.mkdir(exist_ok=True)
+
+    rec = {
+        "ts":        ts,
+        "frame_dir": frame_dir,
+        "running":   True,
+        "count":     0,
+        "thread":    None,
+    }
+
+    def _capture():
+        while rec["running"]:
+            try:
+                idx = rec["count"]
+                path = str(frame_dir / f"frame_{idx:05d}.png")
+                page.screenshot(path=path, full_page=False)
+                rec["count"] += 1
+            except Exception:
+                pass
+            time.sleep(0.5)
+
+    t = threading.Thread(target=_capture, daemon=True)
+    t.start()
+    rec["thread"] = t
+    log.info(f"🎬 录屏已开始，帧目录: {frame_dir}")
+    return rec
+
+def stop_page_recording(rec):
+    """
+    停止录屏，将帧合成为 GIF（无需额外依赖）或 MP4（需要 imageio / ffmpeg）。
+    优先尝试 Pillow 合成 GIF，失败则保留帧目录供手动查看。
+    """
+    if rec is None:
+        return
+
+    rec["running"] = False
+    if rec.get("thread"):
+        rec["thread"].join(timeout=2)
+
+    frame_dir = rec["frame_dir"]
+    ts        = rec["ts"]
+    count     = rec["count"]
+    log.info(f"🎬 录屏停止，共采集 {count} 帧")
+
+    if count == 0:
+        log.warning("录屏无帧，跳过合成")
+        return
+
+    # ── 方案 A：用 Pillow 合成 GIF ──────────────────────────
+    try:
+        from PIL import Image
+
+        frames_paths = sorted(frame_dir.glob("frame_*.png"))
+        images = [Image.open(str(p)).convert("P", dither=Image.FLOYDSTEINBERG) for p in frames_paths]
+        out_path = str(RECORDING_DIR / f"{ts}_recording.gif")
+        images[0].save(
+            out_path,
+            save_all=True,
+            append_images=images[1:],
+            duration=500,      # 每帧 500ms，与采集间隔一致
+            loop=0,
+            optimize=True,
+        )
+        log.info(f"🎬 GIF 已保存: {out_path}")
+
+        # 合成成功后清理帧目录节省空间
+        for p in frames_paths:
+            p.unlink()
+        frame_dir.rmdir()
+        return
+    except ImportError:
+        log.warning("Pillow 未安装，尝试 ffmpeg 合成 MP4...")
+    except Exception as e:
+        log.warning(f"GIF 合成失败: {e}，尝试 ffmpeg...")
+
+    # ── 方案 B：用 ffmpeg 合成 MP4 ──────────────────────────
+    try:
+        import subprocess
+        out_path = str(RECORDING_DIR / f"{ts}_recording.mp4")
+        cmd = [
+            "ffmpeg", "-y",
+            "-framerate", "2",                          # 2fps（每帧 500ms）
+            "-i", str(frame_dir / "frame_%05d.png"),
+            "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",  # 保证偶数尺寸
+            "-c:v", "libx264",
+            "-pix_fmt", "yuv420p",
+            out_path,
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        if result.returncode == 0:
+            log.info(f"🎬 MP4 已保存: {out_path}")
+            for p in sorted(frame_dir.glob("frame_*.png")):
+                p.unlink()
+            frame_dir.rmdir()
+        else:
+            log.warning(f"ffmpeg 失败: {result.stderr[:200]}")
+            log.info(f"🎬 帧目录保留供手动查看: {frame_dir}（共 {count} 帧）")
+    except FileNotFoundError:
+        log.warning("ffmpeg 未找到，帧目录保留供手动查看")
+        log.info(f"🎬 帧目录: {frame_dir}（共 {count} 帧）")
+    except Exception as e:
+        log.warning(f"MP4 合成异常: {e}")
+        log.info(f"🎬 帧目录保留供手动查看: {frame_dir}")
 
 # ─────────────────────────────────────────────────────────────
 # WxPusher 推送
@@ -111,13 +255,11 @@ def inject_discord_token(page, token: str):
 
 # ─────────────────────────────────────────────────────────────
 # Discord OAuth 授权页处理
-# 自动向下滚动直到授权按钮可见，然后点击
 # ─────────────────────────────────────────────────────────────
 def handle_oauth_page(page):
     log.info("处理 Discord OAuth 授权页...")
     page.wait_for_timeout(2000)
 
-    # 等待授权按钮出现（最多等 30 次 × 0.8s）
     for _ in range(30):
         if "discord.com" not in page.url:
             log.info("已离开 Discord，OAuth 完成")
@@ -136,7 +278,6 @@ def handle_oauth_page(page):
         if "authorize" in btn_text or "授权" in btn_text:
             break
 
-        # 滚动页面让授权按钮出现
         page.evaluate("""() => {
             const sels = ['[class*="scroller"]','[class*="oauth2"]','[class*="permissionList"]',
                 '[class*="content"] [class*="scroll"]','[class*="listScroller"]',
@@ -160,7 +301,6 @@ def handle_oauth_page(page):
         }""")
         page.wait_for_timeout(800)
 
-    # 点击授权按钮
     for _ in range(10):
         if "discord.com" not in page.url:
             return
@@ -210,7 +350,6 @@ def do_login(page) -> bool:
         log.warning(f"goto 超时/异常: {e}")
     take_screenshot(page, "01_auth_page")
 
-    # FIX v4.2: 等待页面 JS 完全渲染
     page.wait_for_timeout(2000)
 
     # 服务条款确认按钮
@@ -223,12 +362,12 @@ def do_login(page) -> bool:
     except Exception:
         pass
 
-    # FIX v4.3: 关闭 Cookie/GDPR 同意弹窗（fc- 前缀），避免遮挡 Discord 按钮
+    # FIX v4.3: 关闭 Cookie/GDPR 同意弹窗（fc- 前缀）
     for consent_sel in [
-        'button.fc-cta-consent',           # "Consent" 主按钮
+        'button.fc-cta-consent',
         'button.fc-button.fc-cta-consent',
-        'button.fc-vendor-preferences-accept-all',  # "Accept all"（vendor 页）
-        'button.fc-data-preferences-accept-all',    # "Accept all"（preferences 页）
+        'button.fc-vendor-preferences-accept-all',
+        'button.fc-data-preferences-accept-all',
         'button:has-text("Consent")',
         'button:has-text("Accept all")',
         'button:has-text("同意")',
@@ -243,14 +382,13 @@ def do_login(page) -> bool:
         except Exception:
             continue
 
-    # FIX v4.4: Discord 按钮实际是 <a href="login" class="hyperlink_abs w-inline-block">（无文字，图标为图片）
-    # 放在首位；其余选择器保留作兜底
+    # FIX v4.4: Discord 按钮实际是 <a href="login"> 无文字图标链接，置于首位
     log.info("[B] 点击 Discord 登录按钮...")
     clicked = False
     for sel in [
-        'a[href="login"].hyperlink_abs',         # FIX v4.4: 精确匹配
-        'a[href="login"]',                        # FIX v4.4: 宽松匹配
-        'div.nav_login_block_extra a[href="login"]',  # FIX v4.4: 带父级限定
+        'a[href="login"].hyperlink_abs',
+        'a[href="login"]',
+        'div.nav_login_block_extra a[href="login"]',
         'button:has-text("DISCORD")',
         'button:has-text("Discord")',
         'button:has-text("discord")',
@@ -267,7 +405,7 @@ def do_login(page) -> bool:
     ]:
         try:
             btn = page.locator(sel).first
-            if btn.is_visible(timeout=3000):   # FIX v4.2: 从 2000 改为 3000
+            if btn.is_visible(timeout=3000):
                 btn.click()
                 log.info(f"已点击登录按钮: {sel}")
                 clicked = True
@@ -276,16 +414,15 @@ def do_login(page) -> bool:
             continue
 
     if not clicked:
-        # FIX v4.2: 找不到按钮时打印页面所有可交互元素，方便调试
         log.error("未找到 Discord 登录按钮，开始打印页面元素调试信息...")
         try:
             elements = page.locator("button, a").all()
             for el in elements:
                 try:
-                    tag   = el.evaluate("el => el.tagName")
-                    text  = el.inner_text(timeout=500).strip()[:80]
-                    cls   = el.get_attribute("class") or ""
-                    href  = el.get_attribute("href") or ""
+                    tag  = el.evaluate("el => el.tagName")
+                    text = el.inner_text(timeout=500).strip()[:80]
+                    cls  = el.get_attribute("class") or ""
+                    href = el.get_attribute("href") or ""
                     log.info(f"  [{tag}] text='{text}' class='{cls[:60]}' href='{href[:60]}'")
                 except Exception:
                     pass
@@ -470,8 +607,9 @@ def build_message(info: dict) -> tuple[str, str]:
 # ─────────────────────────────────────────────────────────────
 def main():
     log.info("=" * 55)
-    log.info("  OptikLink 自动登录脚本 v4.4 (CloakBrowser)")
+    log.info("  OptikLink 自动登录脚本 v4.5 (CloakBrowser)")
     log.info("=" * 55)
+    log.info(f"  截图: {'开启' if ENABLE_SCREENSHOT else '关闭'}  |  录屏: {'开启' if ENABLE_SCREENRECORD else '关闭'}")
 
     from cloakbrowser import launch, ensure_binary
     ensure_binary()
@@ -488,6 +626,9 @@ def main():
         page.set_viewport_size({"width": VIEWPORT_W, "height": VIEWPORT_H})
     except Exception:
         pass
+
+    # 录屏：在页面创建后立即开始
+    recorder = start_page_recording(page)
 
     try:
         success = do_login(page)
@@ -522,6 +663,8 @@ def main():
         )
         sys.exit(1)
     finally:
+        # 录屏：无论成功失败都停止并保存
+        stop_page_recording(recorder)
         time.sleep(3)
         browser.close()
         log.info("浏览器已关闭")
