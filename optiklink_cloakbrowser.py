@@ -1,6 +1,10 @@
 """
-OptikLink 每日自动登录脚本 v4.2 (CloakBrowser版)
+OptikLink 每日自动登录脚本 v4.3 (CloakBrowser版)
 原理：用 CloakBrowser 打开页面，注入 Discord Token 完成 OAuth2 授权
+
+修复记录 v4.3:
+  - 在点击 Discord 按钮前，自动关闭 Cookie/GDPR 同意弹窗（fc- 前缀）
+  - 弹窗会遮挡 Discord 按钮导致 is_visible() 返回 False，修复后先 Consent 再找按钮
 
 修复记录 v4.2:
   - 修复 Discord 登录按钮选择器顺序（button 优先于 a 标签）
@@ -215,6 +219,26 @@ def do_login(page) -> bool:
             page.wait_for_timeout(1500)
     except Exception:
         pass
+
+    # FIX v4.3: 关闭 Cookie/GDPR 同意弹窗（fc- 前缀），避免遮挡 Discord 按钮
+    for consent_sel in [
+        'button.fc-cta-consent',           # "Consent" 主按钮
+        'button.fc-button.fc-cta-consent',
+        'button.fc-vendor-preferences-accept-all',  # "Accept all"（vendor 页）
+        'button.fc-data-preferences-accept-all',    # "Accept all"（preferences 页）
+        'button:has-text("Consent")',
+        'button:has-text("Accept all")',
+        'button:has-text("同意")',
+    ]:
+        try:
+            btn = page.locator(consent_sel).first
+            if btn.is_visible(timeout=1500):
+                btn.click()
+                log.info(f"已关闭 Cookie 弹窗: {consent_sel}")
+                page.wait_for_timeout(1000)
+                break
+        except Exception:
+            continue
 
     # FIX v4.2: 调整选择器顺序，button 优先于 a 标签，增加 class 兜底选择器
     log.info("[B] 点击 Discord 登录按钮...")
@@ -439,7 +463,7 @@ def build_message(info: dict) -> tuple[str, str]:
 # ─────────────────────────────────────────────────────────────
 def main():
     log.info("=" * 55)
-    log.info("  OptikLink 自动登录脚本 v4.2 (CloakBrowser)")
+    log.info("  OptikLink 自动登录脚本 v4.3 (CloakBrowser)")
     log.info("=" * 55)
 
     from cloakbrowser import launch, ensure_binary
