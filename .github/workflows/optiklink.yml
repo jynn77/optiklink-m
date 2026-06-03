@@ -13,6 +13,14 @@ on:
         options:
           - 'false'
           - 'true'
+      enable_screenrecord:
+        description: '是否录像 (true=录像 / false=不录像)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
 
 jobs:
   auto-login:
@@ -76,6 +84,7 @@ jobs:
           EXPIRE_DATE:      ${{ secrets.EXPIRE_DATE }}
           PROXY_URL:        "socks5://127.0.0.1:10808"
           ENABLE_SCREENSHOT: ${{ github.event.inputs.enable_screenshot || 'false' }}
+          ENABLE_SCREENRECORD: ${{ github.event.inputs.enable_screenrecord || 'false' }}
           DISPLAY:          ":99"
           LIBGL_ALWAYS_SOFTWARE: "1"
           GALLIUM_DRIVER:   "llvmpipe"
@@ -87,6 +96,17 @@ jobs:
         with:
           name: screenshots
           path: ./screenshots/*.png
+          if-no-files-found: ignore
+          retention-days: 3
+
+      - name: 上传录像（仅录像模式或失败时）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: recordings
+          path: |
+            ./recordings/*.gif
+            ./recordings/*.mp4
           if-no-files-found: ignore
           retention-days: 3
 
