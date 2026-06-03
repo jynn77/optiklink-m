@@ -259,6 +259,51 @@ def optiklink_callback(session, callback_url: str):
 
 
 # ─────────────────────────────────────────────────────────────
+# 截图功能（需要 ENABLE_SCREENSHOT=true 环境变量）
+# ─────────────────────────────────────────────────────────────
+ENABLE_SCREENSHOT = os.environ.get("ENABLE_SCREENSHOT", "false").lower() == "true"
+
+def take_screenshot(url: str, filename: str, cookies=None):
+    """用 playwright 对指定 URL 截图，保存为 filename"""
+    if not ENABLE_SCREENSHOT:
+        return
+    try:
+        from playwright.sync_api import sync_playwright
+        print(f"    [截图] 正在截图: {url} -> {filename}")
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context(
+                viewport={"width": 1280, "height": 900},
+                user_agent=HEADERS_BROWSER["User-Agent"],
+            )
+            if cookies:
+                context.add_cookies(cookies)
+            page = context.new_page()
+            page.goto(url, timeout=30000, wait_until="networkidle")
+            page.screenshot(path=filename, full_page=True)
+            browser.close()
+        print(f"    [截图] 已保存: {filename}")
+    except Exception as e:
+        print(f"    [截图] 失败: {e}")
+
+
+def session_to_playwright_cookies(session, url: str) -> list:
+    """把 requests session 的 cookies 转换为 playwright 格式"""
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    domain = parsed.netloc
+    result = []
+    for c in session.cookies:
+        result.append({
+            "name": c.name,
+            "value": c.value,
+            "domain": c.domain or domain,
+            "path": c.path or "/",
+        })
+    return result
+
+
+# ─────────────────────────────────────────────────────────────
 # Step D: Dashboard
 # ─────────────────────────────────────────────────────────────
 def check_dashboard(session) -> dict:
@@ -271,23 +316,58 @@ def check_dashboard(session) -> dict:
             "expire_date": EXPIRE_DATE, "running_servers": "N/A"}
     html = r.text
 
+    # 调试：打印页面前1500字符，帮助分析结构
+    print("    ── HTML 预览（前1500字符）──")
+    print(html[:1500])
+    print("    ── HTML 预览结束 ──")
+
     if "DASHBOARD" in html.upper():
         info["logged_in"] = True
+
+        # 用户名：多种模式尝试
         for pat in [
             r'Welcome\s+<[^>]+>([^<]+)</[^>]+>\s+to your Dashboard',
             r'"username"\s*:\s*"([^"]+)"',
+            r'Welcome\s+(\w+)\s+to',
             r'simeter\w*',
         ]:
             m = re.search(pat, html, re.I)
             if m:
                 info["username"] = m.group(1) if m.lastindex else m.group(0)
                 break
-        m2 = re.search(r'(\d+)\s+servers?', html, re.I)
-        if m2:
-            info["running_servers"] = m2.group(1)
-        m3 = re.search(r'(\d{2}\.\d{2}\.\d{4})', html)
-        if m3:
-            info["expire_date"] = m3.group(1)
+
+        # 运行服务器数量：多种模式
+        for pat2 in [
+            r'(\d+)\s+servers?',
+            r'RUNNING SERVERS[^>]*>.*?(\d+)',
+            r'running[_\-]?servers?["\s:]+(\d+)',
+        ]:
+            m2 = re.search(pat2, html, re.I)
+            if m2:
+                info["running_servers"] = m2.group(1)
+                break
+
+        # 到期日期：多种模式
+        for pat3 in [
+            r'(\d{2}\.\d{2}\.\d{4})',          # 11.06.2026
+            r'(\d{4}-\d{2}-\d{2})',             # 2026-06-11
+            r'expire[^>]*>.*?(\d{2}\.\d{2}\.\d{4})',
+            r'SERVICE EXPIRE[^:]*:.*?(\d{2}\.\d{2}\.\d{4})',
+        ]:
+            m3 = re.search(pat3, html, re.I)
+            if m3:
+                val = m3.group(1)
+                # 如果是 yyyy-mm-dd 格式，转换为 dd.mm.yyyy
+                if re.match(r'\d{4}-\d{2}-\d{2}', val):
+                    parts = val.split("-")
+                    val = f"{parts[2]}.{parts[1]}.{parts[0]}"
+                info["expire_date"] = val
+                break
+
+    # 截图
+    if ENABLE_SCREENSHOT:
+        pw_cookies = session_to_playwright_cookies(session, "https://optiklink.net")
+        take_screenshot("https://optiklink.net/home", "dashboard.png", cookies=pw_cookies)
 
     print(f"    信息: {info}")
     return info
