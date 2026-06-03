@@ -117,6 +117,12 @@ def start_page_recording(page=None):
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
         )
+        # 等待 2s，确认 ffmpeg 真正开始录制而非立即退出
+        time.sleep(2)
+        if proc.poll() is not None:
+            stderr_out = proc.stderr.read().decode(errors="replace")
+            log.error(f"🎬 ffmpeg 启动后立即退出，可能是 Xvfb :99 未就绪。stderr:\n{stderr_out}")
+            return None
         log.info(f"🎬 录屏已开始 (ffmpeg x11grab :99) → {out_path}")
     except FileNotFoundError:
         log.error("🎬 ffmpeg 未安装，录屏不可用")
@@ -143,12 +149,16 @@ def stop_page_recording(rec):
             # 发送 'q' 让 ffmpeg 优雅退出
             proc.stdin.write(b"q")
             proc.stdin.flush()
-            proc.wait(timeout=15)
+            _, stderr_bytes = proc.communicate(timeout=15)
+            if stderr_bytes:
+                log.info(f"🎬 ffmpeg stderr:\n{stderr_bytes.decode(errors='replace')[-2000:]}")
             log.info(f"🎬 录屏已停止: {path}")
         except subprocess.TimeoutExpired:
             log.warning("ffmpeg 未在 15s 内退出，强制终止")
             proc.kill()
-            proc.wait(timeout=5)
+            _, stderr_bytes = proc.communicate(timeout=5)
+            if stderr_bytes:
+                log.info(f"🎬 ffmpeg stderr:\n{stderr_bytes.decode(errors='replace')[-2000:]}")
         except Exception as e:
             log.warning(f"停止录屏异常: {e}")
             try:
