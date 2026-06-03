@@ -6,18 +6,18 @@ on:
   workflow_dispatch:
     inputs:
       enable_screenshot:
-        description: '是否截图'
+        description: '是否截图 (true=截图 / false=不截图)'
         required: false
-        default: '否'
+        default: 'false'
         type: choice
         options:
-          - '否'
-          - '是'
+          - 'false'
+          - 'true'
 
 jobs:
   auto-login:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     permissions:
       contents: read
 
@@ -30,15 +30,21 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: 安装依赖
-        run: pip install requests cloudscraper "requests[socks]"
-
-      - name: 安装 Playwright（仅截图模式）
-        if: github.event.inputs.enable_screenshot == '是'
+      - name: 安装系统依赖
         run: |
-          pip install playwright
-          playwright install chromium
-          playwright install-deps chromium
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            xvfb curl unzip \
+            fonts-noto-cjk \
+            libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
+            libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 \
+            libxfixes3 libxrandr2 libgbm1 \
+            libasound2t64 || sudo apt-get install -y -qq libasound2
+
+      - name: 安装 Python 依赖
+        run: |
+          pip install "cloakbrowser[geoip]"
+          python -c "from cloakbrowser import ensure_binary; ensure_binary()"
 
       - name: 下载并启动 Xray 代理
         env:
@@ -56,36 +62,33 @@ jobs:
           curl -s --max-time 5 --socks5 127.0.0.1:10808 ifconfig.me || echo "获取失败"
           echo ""
 
-      - name: 执行自动登录脚本
-        id: login
-        env:
-          DISCORD_TOKEN:        ${{ secrets.DISCORD_TOKEN }}
-          WXPUSHER_TOKEN:       ${{ secrets.WXPUSHER_TOKEN }}
-          WXPUSHER_UID:         ${{ secrets.WXPUSHER_UID }}
-          DISCORD_CLIENT_ID:    ${{ secrets.DISCORD_CLIENT_ID }}
-          DISCORD_REDIRECT_URI: ${{ secrets.DISCORD_REDIRECT_URI }}
-          EXPIRE_DATE:          ${{ secrets.EXPIRE_DATE }}
-          PROXY_URL:            "socks5h://127.0.0.1:10808"
-          ENABLE_SCREENSHOT:    ${{ github.event.inputs.enable_screenshot == '是' && 'true' || 'false' }}
-        run: python optiklink_login.py
+      - name: 启动 Xvfb 虚拟显示器
+        run: |
+          Xvfb :99 -screen 0 1280x753x24 +extension RANDR &
+          sleep 2
+          DISPLAY=:99 xdpyinfo > /dev/null 2>&1 && echo "Xvfb 就绪" || echo "Xvfb 启动异常"
 
-      - name: 上传截图（仅截图模式）
-        if: github.event.inputs.enable_screenshot == '是' && always()
+      - name: 执行自动登录脚本
+        env:
+          DISCORD_TOKEN:    ${{ secrets.DISCORD_TOKEN }}
+          WXPUSHER_TOKEN:   ${{ secrets.WXPUSHER_TOKEN }}
+          WXPUSHER_UID:     ${{ secrets.WXPUSHER_UID }}
+          EXPIRE_DATE:      ${{ secrets.EXPIRE_DATE }}
+          PROXY_URL:        "socks5://127.0.0.1:10808"
+          ENABLE_SCREENSHOT: ${{ github.event.inputs.enable_screenshot || 'false' }}
+          DISPLAY:          ":99"
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          GALLIUM_DRIVER:   "llvmpipe"
+        run: timeout 300 python optiklink_cloakbrowser.py
+
+      - name: 上传截图（仅截图模式或失败时）
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: dashboard-screenshot
-          path: dashboard.png
-          if-no-files-found: warn
-
-      - name: 自动更新 DISCORD_CLIENT_ID Secret
-        if: steps.login.outputs.new_client_id != ''
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NEW_CID:  ${{ steps.login.outputs.new_client_id }}
-        run: |
-          echo "检测到新 client_id，正在自动更新 Secret..."
-          gh secret set DISCORD_CLIENT_ID --body "$NEW_CID" --repo "$GITHUB_REPOSITORY"
-          echo "✅ Secret DISCORD_CLIENT_ID 已自动更新"
+          name: screenshots
+          path: ./screenshots/*.png
+          if-no-files-found: ignore
+          retention-days: 3
 
   cleanup-old-runs:
     runs-on: ubuntu-latest
@@ -105,26 +108,16 @@ jobs:
               repo:  context.repo.repo,
             });
             const wf = workflows.data.workflows.find(w => w.name === workflowName);
-            if (!wf) {
-              console.log("未找到 workflow，跳过清理");
-              return;
-            }
+            if (!wf) { console.log("未找到 workflow，跳过清理"); return; }
             const runs = await github.paginate(
               github.rest.actions.listWorkflowRuns,
-              {
-                owner:       context.repo.owner,
-                repo:        context.repo.repo,
-                workflow_id: wf.id,
-                per_page:    100,
-              }
+              { owner: context.repo.owner, repo: context.repo.repo, workflow_id: wf.id, per_page: 100 }
             );
             const toDelete = runs.slice(KEEP);
             console.log(`共 ${runs.length} 条 run，保留 ${KEEP} 条，删除 ${toDelete.length} 条`);
             for (const run of toDelete) {
               await github.rest.actions.deleteWorkflowRun({
-                owner:  context.repo.owner,
-                repo:   context.repo.repo,
-                run_id: run.id,
+                owner: context.repo.owner, repo: context.repo.repo, run_id: run.id,
               });
               console.log(`已删除 run #${run.run_number} (id=${run.id})`);
             }
