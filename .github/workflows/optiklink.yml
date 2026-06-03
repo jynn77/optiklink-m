@@ -48,10 +48,9 @@ jobs:
             libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 \
             libxfixes3 libxrandr2 libgbm1 \
             libasound2t64 || sudo apt-get install -y -qq libasound2
-          # v4.6: 录屏依赖 — scrot 截图 + imagemagick (import) + ffmpeg (合成)
-          sudo apt-get install -y -qq \
-            scrot imagemagick ffmpeg \
-            || echo "部分录屏依赖安装失败，将自动降级"
+          # v4.6: 录屏依赖 — ffmpeg (x11grab 直接录制 Xvfb)
+          sudo apt-get install -y -qq ffmpeg \
+            || echo "ffmpeg 安装失败，录屏将不可用"
 
       - name: 安装 Python 依赖
         run: |
