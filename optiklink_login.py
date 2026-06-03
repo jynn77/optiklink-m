@@ -37,8 +37,8 @@ EXPIRE_DATE = os.environ.get("EXPIRE_DATE", "22.05.2026")
 # ── OptikLink Discord OAuth2 参数 ─────────────────────────────
 # 优先从 Secrets 环境变量读取，便于 client_id 变更后无需改代码
 # 若下面的值失效：按文末说明重新抓取后更新 GitHub Secrets
-DISCORD_CLIENT_ID    = os.environ.get("DISCORD_CLIENT_ID",    "1005764586547838976")
-DISCORD_REDIRECT_URI = os.environ.get("DISCORD_REDIRECT_URI", "https://optiklink.net/callback")
+DISCORD_CLIENT_ID    = os.environ.get("DISCORD_CLIENT_ID",    "933437142254887052")
+DISCORD_REDIRECT_URI = os.environ.get("DISCORD_REDIRECT_URI", "https://optiklink.com/login")
 
 # ─────────────────────────────────────────────────────────────
 HEADERS_BROWSER = {
@@ -298,11 +298,18 @@ def check_dashboard(session) -> dict:
 # ─────────────────────────────────────────────────────────────
 def build_message(info: dict) -> tuple[str, str]:
     now_utc = datetime.now(timezone.utc)
-    expire_dt = datetime.strptime(info["expire_date"], "%d.%m.%Y").replace(tzinfo=timezone.utc)
-    days_left = (expire_dt - now_utc).days
+    if info.get("expire_date"):
+        expire_dt = datetime.strptime(info["expire_date"], "%d.%m.%Y").replace(tzinfo=timezone.utc)
+        days_left = (expire_dt - now_utc).days
+    else:
+        expire_dt = None
+        days_left = -1
     status = "✅ 登录成功" if info["logged_in"] else "❌ 登录失败"
 
-    if days_left <= 3:
+    if days_left == -1:
+        warning = "\n\n> ⚠️ 未能获取到期日期，请手动检查"
+        title = f"OptikLink 签到 | {status} | 到期日期未知"
+    elif days_left <= 3:
         warning = (
             f"\n\n---\n"
             f"## 🚨🚨🚨 紧急：服务即将到期！\n\n"
