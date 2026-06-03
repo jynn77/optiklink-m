@@ -78,8 +78,19 @@ jobs:
       - name: 启动 Xvfb 虚拟显示器
         run: |
           Xvfb :99 -screen 0 1280x753x24 +extension RANDR &
-          sleep 2
-          DISPLAY=:99 xdpyinfo > /dev/null 2>&1 && echo "Xvfb 就绪" || echo "Xvfb 启动异常"
+          echo "等待 Xvfb :99 就绪..."
+          for i in $(seq 1 15); do
+            if DISPLAY=:99 xdpyinfo > /dev/null 2>&1; then
+              echo "✅ Xvfb 就绪（第 ${i} 次检测）"
+              break
+            fi
+            if [ "$i" -eq 15 ]; then
+              echo "❌ Xvfb 15 次检测仍未就绪，终止"
+              exit 1
+            fi
+            echo "  第 ${i} 次检测未就绪，等待 1s..."
+            sleep 1
+          done
 
       - name: 执行自动登录脚本
         env:
