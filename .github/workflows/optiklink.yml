@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: "0 1 * * *"   # 每天 UTC 01:00（北京时间 09:00）
   workflow_dispatch:
+    inputs:
+      enable_screenshot:
+        description: '是否截图（true/false）'
+        required: false
+        default: 'false'
 
 jobs:
   auto-login:
@@ -23,6 +28,13 @@ jobs:
 
       - name: 安装依赖
         run: pip install requests cloudscraper "requests[socks]"
+
+      - name: 安装 Playwright（仅截图模式）
+        if: github.event.inputs.enable_screenshot == 'true'
+        run: |
+          pip install playwright
+          playwright install chromium
+          playwright install-deps chromium
 
       - name: 下载并启动 Xray 代理
         env:
@@ -46,9 +58,20 @@ jobs:
           DISCORD_TOKEN:        ${{ secrets.DISCORD_TOKEN }}
           WXPUSHER_TOKEN:       ${{ secrets.WXPUSHER_TOKEN }}
           WXPUSHER_UID:         ${{ secrets.WXPUSHER_UID }}
+          DISCORD_CLIENT_ID:    ${{ secrets.DISCORD_CLIENT_ID }}
+          DISCORD_REDIRECT_URI: ${{ secrets.DISCORD_REDIRECT_URI }}
           EXPIRE_DATE:          ${{ secrets.EXPIRE_DATE }}
           PROXY_URL:            "socks5h://127.0.0.1:10808"
+          ENABLE_SCREENSHOT:    ${{ github.event.inputs.enable_screenshot || 'false' }}
         run: python optiklink_login.py
+
+      - name: 上传截图（仅截图模式）
+        if: github.event.inputs.enable_screenshot == 'true' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dashboard-screenshot
+          path: dashboard.png
+          if-no-files-found: warn
 
       - name: 自动更新 DISCORD_CLIENT_ID Secret
         if: steps.login.outputs.new_client_id != ''
