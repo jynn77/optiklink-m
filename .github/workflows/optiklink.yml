@@ -75,9 +75,22 @@ jobs:
           curl -s --max-time 5 --socks5 127.0.0.1:10808 ifconfig.me || echo "获取失败"
           echo ""
 
-      - name: 启动 Xvfb 虚拟显示器
+      - name: 启动 Xvfb 并执行自动登录脚本
+        env:
+          DISCORD_TOKEN:       ${{ secrets.DISCORD_TOKEN }}
+          WXPUSHER_TOKEN:      ${{ secrets.WXPUSHER_TOKEN }}
+          WXPUSHER_UID:        ${{ secrets.WXPUSHER_UID }}
+          EXPIRE_DATE:         ${{ secrets.EXPIRE_DATE }}
+          PROXY_URL:           "socks5://127.0.0.1:10808"
+          ENABLE_SCREENSHOT:   ${{ github.event.inputs.enable_screenshot || 'false' }}
+          ENABLE_SCREENRECORD: ${{ github.event.inputs.enable_screenrecord || 'false' }}
+          DISPLAY:             ":99"
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          GALLIUM_DRIVER:      "llvmpipe"
         run: |
+          # 与脚本在同一 step，后台进程可以共享（跨 step 后台进程会丢失）
           Xvfb :99 -screen 0 1280x753x24 +extension RANDR &
+          XVFB_PID=$!
           echo "等待 Xvfb :99 就绪..."
           for i in $(seq 1 15); do
             if DISPLAY=:99 xdpyinfo > /dev/null 2>&1; then
@@ -92,19 +105,11 @@ jobs:
             sleep 1
           done
 
-      - name: 执行自动登录脚本
-        env:
-          DISCORD_TOKEN:    ${{ secrets.DISCORD_TOKEN }}
-          WXPUSHER_TOKEN:   ${{ secrets.WXPUSHER_TOKEN }}
-          WXPUSHER_UID:     ${{ secrets.WXPUSHER_UID }}
-          EXPIRE_DATE:      ${{ secrets.EXPIRE_DATE }}
-          PROXY_URL:        "socks5://127.0.0.1:10808"
-          ENABLE_SCREENSHOT: ${{ github.event.inputs.enable_screenshot || 'false' }}
-          ENABLE_SCREENRECORD: ${{ github.event.inputs.enable_screenrecord || 'false' }}
-          DISPLAY:          ":99"
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          GALLIUM_DRIVER:   "llvmpipe"
-        run: timeout 300 python optiklink_cloakbrowser.py
+          # 执行登录脚本
+          timeout 300 python optiklink_cloakbrowser.py || echo "脚本退出码: $?"
+
+          # 清理 Xvfb
+          kill $XVFB_PID 2>/dev/null || true
 
       # v4.6: 改为 always() 确保失败时也能上传
       - name: 上传截图（仅截图模式或失败时）
