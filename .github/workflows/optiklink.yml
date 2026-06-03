@@ -42,7 +42,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
-            xvfb curl unzip \
+            xvfb x11-utils curl unzip \
             fonts-noto-cjk \
             libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
             libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 \
@@ -92,18 +92,24 @@ jobs:
           Xvfb :99 -screen 0 1280x753x24 +extension RANDR &
           XVFB_PID=$!
           echo "等待 Xvfb :99 就绪..."
-          for i in $(seq 1 15); do
-            if DISPLAY=:99 xdpyinfo > /dev/null 2>&1; then
-              echo "✅ Xvfb 就绪（第 ${i} 次检测）"
-              break
-            fi
-            if [ "$i" -eq 15 ]; then
-              echo "❌ Xvfb 15 次检测仍未就绪，终止"
-              exit 1
-            fi
-            echo "  第 ${i} 次检测未就绪，等待 1s..."
-            sleep 1
-          done
+          if command -v xdpyinfo > /dev/null 2>&1; then
+            for i in $(seq 1 15); do
+              if DISPLAY=:99 xdpyinfo > /dev/null 2>&1; then
+                echo "✅ Xvfb 就绪（第 ${i} 次检测）"
+                break
+              fi
+              if [ "$i" -eq 15 ]; then
+                echo "❌ Xvfb 15 次检测仍未就绪，终止"
+                exit 1
+              fi
+              echo "  第 ${i} 次检测未就绪，等待 1s..."
+              sleep 1
+            done
+          else
+            echo "xdpyinfo 不可用，直接等待 3s..."
+            sleep 3
+            echo "✅ Xvfb 等待完成"
+          fi
 
           # 执行登录脚本
           timeout 300 python optiklink_cloakbrowser.py || echo "脚本退出码: $?"
