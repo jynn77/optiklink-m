@@ -11,10 +11,13 @@ OptikLink 每日自动登录脚本 v4.6 (CloakBrowser版)
   - 新增通用弹窗/广告拦截器，在页面加载后自动清除常见广告弹窗
   - Discord OAuth 授权页增强：新增 "同意" 按钮处理，支持中文界面
 
+修复记录 v4.7:
+  - 截图改为无条件保存（移除 ENABLE_SCREENSHOT 开关），与 Zytrano 保持一致
+  - 录屏改为 workflow_dispatch 手动触发时可选（true=录屏 / false=不录屏），默认 false
+
 修复记录 v4.5:
   - 新增录屏功能：环境变量 ENABLE_SCREENRECORD=true 开启，默认 false
   - 录屏文件保存至 recordings/ 目录
-  - 与截图功能互相独立，可单独或同时开启
 
 修复记录 v4.4:
   - Discord 按钮实际为 <a href="login" class="hyperlink_abs w-inline-block">（无文字，图标为图片）
@@ -48,7 +51,6 @@ WXPUSHER_TOKEN       = os.environ["WXPUSHER_TOKEN"]
 WXPUSHER_UID         = os.environ["WXPUSHER_UID"]
 EXPIRE_DATE          = os.environ.get("EXPIRE_DATE", "")
 PROXY_URL            = os.environ.get("PROXY_URL", "socks5://127.0.0.1:10808")
-ENABLE_SCREENSHOT    = os.environ.get("ENABLE_SCREENSHOT",    "false").lower() == "true"
 ENABLE_SCREENRECORD  = os.environ.get("ENABLE_SCREENRECORD",  "false").lower() == "true"
 
 BASE_URL      = "https://optiklink.net"
@@ -65,8 +67,6 @@ SCREENSHOT_DIR = Path("./screenshots")
 SCREENSHOT_DIR.mkdir(exist_ok=True)
 
 def take_screenshot(page, name: str):
-    if not ENABLE_SCREENSHOT:
-        return
     try:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         path = str(SCREENSHOT_DIR / f"{ts}_{name}.png")
@@ -781,7 +781,7 @@ def main():
     log.info("=" * 55)
     log.info("  OptikLink 自动登录脚本 v4.6 (CloakBrowser)")
     log.info("=" * 55)
-    log.info(f"  截图: {'开启' if ENABLE_SCREENSHOT else '关闭'}  |  录屏: {'开启' if ENABLE_SCREENRECORD else '关闭'}")
+    log.info(f"  截图: 始终开启  |  录屏: {'开启' if ENABLE_SCREENRECORD else '关闭'}")
 
     from cloakbrowser import launch, ensure_binary
     ensure_binary()
