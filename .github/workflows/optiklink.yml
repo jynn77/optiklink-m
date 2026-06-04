@@ -79,7 +79,7 @@ jobs:
           GALLIUM_DRIVER:      "llvmpipe"
         run: |
           # 启动 Xvfb
-          Xvfb :99 -screen 0 1280x753x24 +extension RANDR &
+          Xvfb :99 -screen 0 1280x754x24 +extension RANDR &  # 高度须为偶数，与 VIEWPORT_H 保持一致
           XVFB_PID=$!
           echo "等待 Xvfb :99 就绪..."
           if command -v xdpyinfo > /dev/null 2>&1; then
