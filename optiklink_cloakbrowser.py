@@ -58,7 +58,7 @@ AUTH_URL      = f"{BASE_URL}/auth"
 DASHBOARD_URL = BASE_URL
 
 VIEWPORT_W = 1280
-VIEWPORT_H = 753
+VIEWPORT_H = 754  # 必须为偶数，h264 编码器要求宽高均可被 2 整除（原 753 奇数导致录屏 0 字节）
 
 # ─────────────────────────────────────────────────────────────
 # 截图
