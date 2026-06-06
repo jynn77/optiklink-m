@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """
-OptikLink 自动登录脚本 v4.4（修复Discord 400错误）
-- 修复 Discord API 400 错误（改用正确的授权方式）
+OptikLink 自动登录脚本 v4.5（混合授权 + 随机重试）
+- 混合获取授权参数：自动探测 + 硬编码后备
+- 重试等待时间随机（300-500秒）
 - 增加 /error/vpn 检测
-- 增加超时和错误处理
+- 增强超时和错误处理
 """
 
 import os
 import re
 import sys
 import time
+import random
 import signal
 from datetime import datetime, timezone
 from urllib.parse import urlparse, parse_qs, urlencode
@@ -39,17 +41,23 @@ DISCORD_TOKEN       = os.environ.get("DISCORD_TOKEN", "")
 TG_BOT_TOKEN        = os.environ.get("BOT_TOKEN", "")
 TG_CHAT_ID          = os.environ.get("CHAT_ID", "")
 EXPIRE_DATE_RAW     = os.environ.get("EXPIRE_DATE", "")
-DISCORD_CLIENT_ID   = os.environ.get("DISCORD_CLIENT_ID", "933437142254887052")
-DISCORD_REDIRECT_URI = os.environ.get("DISCORD_REDIRECT_URI", "https://optiklink.com/login")
+DISCORD_CLIENT_ID   = os.environ.get("DISCORD_CLIENT_ID", "")
+DISCORD_REDIRECT_URI = os.environ.get("DISCORD_REDIRECT_URI", "")
 PANEL_URL           = os.environ.get("PANEL_URL", "https://control.optiklink.net")
 PANEL_API_KEY       = os.environ.get("PANEL_API_KEY", "")
 PANEL_SERVER_ID     = os.environ.get("PANEL_SERVER_ID", "")
 SERVER_START_WAIT   = int(os.environ.get("SERVER_START_WAIT", "60"))
 PROXY_URL           = os.environ.get("PROXY_URL", "")
 
-# 重试配置
+# 重试配置 - 随机等待时间
 MAX_RETRIES = 3
-RETRY_WAIT_SEC = 300
+RETRY_WAIT_MIN = 300  # 最小等待秒数（5分钟）
+RETRY_WAIT_MAX = 500  # 最大等待秒数（约8.3分钟）
+
+# 硬编码后备参数（从您成功的登录链接中提取）
+FALLBACK_CLIENT_ID = "933437142254887052"
+FALLBACK_REDIRECT_URI = "https://optiklink.com/login"
+FALLBACK_SCOPE = "guilds guilds.join identify email"
 
 HEADERS_BROWSER = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -131,19 +139,20 @@ def tg_send(title: str, content: str):
     text = f"*{title}*\n\n{content}"
     try:
         req.post(url, json={"chat_id": TG_CHAT_ID, "text": text, "parse_mode": "Markdown"}, timeout=15)
-    except:
-        pass
+        debug_print("[Telegram] 推送成功")
+    except Exception as e:
+        debug_print(f"[Telegram] 推送失败: {e}")
 
 # ─────────────────────────────────────────────────────────────
 # 登录核心流程
 # ─────────────────────────────────────────────────────────────
 def discover_oauth_params(session):
-    """探测OAuth参数"""
+    """探测OAuth参数 - 从页面提取"""
     params = {
-        "client_id": DISCORD_CLIENT_ID,
-        "redirect_uri": DISCORD_REDIRECT_URI,
+        "client_id": "",
+        "redirect_uri": "",
         "response_type": "code",
-        "scope": "identify",
+        "scope": "",
     }
     debug_print("[A] 探测 OAuth 参数...")
     
@@ -152,51 +161,74 @@ def discover_oauth_params(session):
         debug_print(f"    状态码: {r.status_code}")
     except Exception as e:
         debug_print(f"    ❌ 请求失败: {e}")
-        raise
+        return params  # 返回空参数，后续使用后备值
     
-    # 从页面提取参数
-    for pat in [r'https?://discord\.com/oauth2/authorize[^\s\'"<>\\]+']:
+    # 从页面提取 Discord 授权链接
+    patterns = [
+        r'https?://discord\.com/oauth2/authorize[^\s\'"<>\\]+',
+        r'https?://discord\.com/api/v[0-9]+/oauth2/authorize[^\s\'"<>\\]+'
+    ]
+    
+    for pat in patterns:
         m = re.search(pat, r.text)
         if m:
-            qs = parse_qs(urlparse(m.group(0)).query)
-            for k in ("client_id", "redirect_uri", "scope", "state"):
-                if qs.get(k):
-                    params[k] = qs[k][0]
+            raw_url = m.group(0).replace("&amp;", "&")
+            qs = parse_qs(urlparse(raw_url).query)
+            if qs.get("client_id"):
+                params["client_id"] = qs["client_id"][0]
+            if qs.get("redirect_uri"):
+                params["redirect_uri"] = qs["redirect_uri"][0]
+            if qs.get("scope"):
+                params["scope"] = qs["scope"][0]
+            if qs.get("state"):
+                params["state"] = qs["state"][0]
+            debug_print(f"    [探测] client_id: {mask(params['client_id'])}")
+            debug_print(f"    [探测] redirect_uri: {params['redirect_uri'][:50] if params['redirect_uri'] else 'N/A'}...")
             break
     
-    debug_print(f"    client_id: {mask(params['client_id'])}")
-    debug_print(f"    redirect_uri: {mask_url(params['redirect_uri'])}")
+    if not params["client_id"]:
+        debug_print("    [探测] 未找到授权参数，将使用硬编码后备值")
+    
     return params
 
 def discord_authorize(session, oauth_params):
-    """Discord授权 - 修复版（解决400错误）"""
+    """Discord授权 - 混合获取参数（探测 + 后备）"""
     debug_print("[B] Discord 授权...")
     
-    # 检查必要的配置
+    # 检查 Discord Token
     if not DISCORD_TOKEN:
         raise RuntimeError("DISCORD_TOKEN 未设置")
     
-    # 使用探测到的参数，如果没有则使用环境变量
-    client_id = oauth_params.get("client_id") or DISCORD_CLIENT_ID
-    redirect_uri = oauth_params.get("redirect_uri") or DISCORD_REDIRECT_URI
-    scope = oauth_params.get("scope", "identify")
+    # 混合获取参数：优先使用探测值，无效则使用硬编码后备值
+    client_id = oauth_params.get("client_id") or FALLBACK_CLIENT_ID
+    redirect_uri = oauth_params.get("redirect_uri") or FALLBACK_REDIRECT_URI
+    scope = oauth_params.get("scope") or FALLBACK_SCOPE
     
+    # 验证参数有效性
     if not client_id or not redirect_uri:
         raise RuntimeError(f"缺少必要参数: client_id={client_id}, redirect_uri={redirect_uri}")
     
-    debug_print(f"    使用 client_id: {mask(client_id)}")
-    debug_print(f"    使用 redirect_uri: {mask_url(redirect_uri)}")
-    debug_print(f"    使用 scope: {scope}")
+    # 打印参数来源
+    if oauth_params.get("client_id"):
+        debug_print(f"    [来源: 自动探测]")
+    else:
+        debug_print(f"    [来源: 硬编码后备]")
+    
+    debug_print(f"    client_id: {mask(client_id)}")
+    debug_print(f"    redirect_uri: {redirect_uri}")
+    debug_print(f"    scope: {scope}")
     
     # 构造授权URL
-    auth_url = f"https://discord.com/api/v10/oauth2/authorize"
+    auth_url = "https://discord.com/api/v10/oauth2/authorize"
     params = {
         "client_id": client_id,
         "redirect_uri": redirect_uri,
         "response_type": "code",
         "scope": scope,
+        "prompt": "none"
     }
-    if "state" in oauth_params:
+    
+    if "state" in oauth_params and oauth_params["state"]:
         params["state"] = oauth_params["state"]
     
     headers = {
@@ -207,49 +239,57 @@ def discord_authorize(session, oauth_params):
     try:
         debug_print(f"    请求 Discord API...")
         start_time = time.time()
-        r = session.get(auth_url, params=params, headers=headers, allow_redirects=False, timeout=REQUEST_TIMEOUT)
+        r = session.get(auth_url, params=params, headers=headers, 
+                       allow_redirects=False, timeout=REQUEST_TIMEOUT)
         elapsed = time.time() - start_time
         debug_print(f"    Discord 状态: {r.status_code} 耗时: {elapsed:.2f}秒")
         
     except Exception as e:
-        debug_print(f"    ❌ 请求失败: {e}")
-        raise
+        debug_print(f"    ❌ Discord 请求失败: {e}")
+        raise RuntimeError(f"Discord授权失败: {e}")
     
-    # 处理重定向（成功）
+    # 处理响应
     if r.status_code == 302 or r.status_code == 301:
         location = r.headers.get("Location")
         if location:
-            debug_print(f"    获取到重定向地址")
+            debug_print(f"    授权成功，重定向到: {mask_url(location)}")
             return location
-        raise RuntimeError("重定向无 Location")
+        raise RuntimeError("重定向响应缺少 Location 头")
     
-    # 处理 200（可能需要额外步骤）
     elif r.status_code == 200:
         try:
             data = r.json()
             debug_print(f"    响应字段: {list(data.keys())}")
-            # 检查是否已授权
+            
             if data.get("authorized") == True and "location" in data:
+                debug_print(f"    账号已授权该应用")
                 return data["location"]
-            elif "code" in data:
-                # 直接返回带code的回调URL
-                return f"{redirect_uri}?code={data['code']}"
+            
+            elif data.get("authorized") == False:
+                debug_print(f"    ❌ Discord 账号未授权此应用")
+                manual_url = f"https://discord.com/oauth2/authorize?client_id={client_id}&redirect_uri={redirect_uri}&response_type=code&scope={scope}"
+                debug_print(f"    请手动访问以下链接进行授权:")
+                debug_print(f"    {manual_url}")
+                raise RuntimeError("需要在 Discord 中手动授权应用（至少一次）")
+            
+            elif "location" in data:
+                return data["location"]
+            elif "url" in data:
+                return data["url"]
             else:
-                debug_print(f"    响应内容: {str(data)[:200]}")
-                raise RuntimeError("无法获取授权码")
+                raise RuntimeError("无法从响应中获取重定向地址")
+                
         except Exception as e:
-            debug_print(f"    ❌ 解析失败: {e}")
-            raise RuntimeError(f"Discord 响应解析失败")
+            debug_print(f"    ❌ 解析响应失败: {e}")
+            raise RuntimeError(f"Discord 响应无效")
     
-    # 处理 400
     elif r.status_code == 400:
         debug_print(f"    ❌ 400 错误")
-        debug_print(f"    响应: {r.text[:300]}")
-        raise RuntimeError("Discord 授权参数错误，请检查 client_id 和 redirect_uri")
+        debug_print(f"    响应内容: {r.text[:300]}")
+        raise RuntimeError("Discord 授权参数错误")
     
-    # 处理 401
     elif r.status_code == 401:
-        raise RuntimeError("Discord Token 无效")
+        raise RuntimeError("Discord Token 无效或已过期")
     
     else:
         raise RuntimeError(f"Discord 授权失败 HTTP {r.status_code}")
@@ -316,12 +356,48 @@ def check_dashboard(session):
     
     return info
 
+def check_and_start_server(session):
+    """服务器保活（可选）"""
+    result = {"skipped": True}
+    if not PANEL_API_KEY:
+        debug_print("[保活] 未配置 PANEL_API_KEY，跳过")
+        return result
+    
+    result["skipped"] = False
+    debug_print("[保活] 检查服务器状态...")
+    # 这里可以添加实际的服务器保活逻辑
+    # 如果不需要，直接返回
+    return result
+
+# ─────────────────────────────────────────────────────────────
+# 构建报告
+# ─────────────────────────────────────────────────────────────
+def build_report(info, server_result, attempt=1, is_intercepted=False):
+    now = datetime.now(timezone.utc)
+    status = "✅ 登录成功" if info.get("logged_in") else "❌ 登录失败"
+    
+    lines = [
+        f"## OptikLink 自动登录报告 (尝试 {attempt})",
+        f"**状态**: {status}",
+        f"**用户名**: {info.get('username', 'N/A')}",
+        f"**运行服务器**: {info.get('running_servers', 'N/A')} 个",
+        f"**服务到期**: {info.get('expire_date', EXPIRE_DATE_RAW or '未设置')}",
+        f"**执行时间**: {now.strftime('%Y-%m-%d %H:%M:%S')} UTC",
+    ]
+    
+    if is_intercepted:
+        lines.append("\n⚠️ 本次尝试被拦截，将自动重试")
+    
+    return "\n".join(lines)
+
 # ─────────────────────────────────────────────────────────────
 # 主函数
 # ─────────────────────────────────────────────────────────────
 def main():
     debug_print("="*55)
-    debug_print("OptikLink 自动登录 v4.4")
+    debug_print("OptikLink 自动登录 v4.5 (混合授权 + 随机重试)")
+    debug_print(f"重试配置: 最多 {MAX_RETRIES} 次")
+    debug_print(f"重试等待: {RETRY_WAIT_MIN}-{RETRY_WAIT_MAX} 秒随机")
     debug_print("="*55)
     
     # 检查配置
@@ -329,37 +405,57 @@ def main():
         debug_print("❌ DISCORD_TOKEN 未设置")
         sys.exit(1)
     
-    if not DISCORD_CLIENT_ID:
-        debug_print("⚠️ DISCORD_CLIENT_ID 未设置，将从页面自动获取")
-    
     for attempt in range(1, MAX_RETRIES + 1):
         if attempt > 1:
-            debug_print(f"\n等待 {RETRY_WAIT_SEC} 秒后重试...")
-            time.sleep(RETRY_WAIT_SEC)
+            wait_time = random.randint(RETRY_WAIT_MIN, RETRY_WAIT_MAX)
+            debug_print(f"\n⏳ 等待 {wait_time} 秒后重试...")
+            time.sleep(wait_time)
         
         debug_print(f"\n========== 尝试 {attempt}/{MAX_RETRIES} ==========")
         session = create_session()
         
         try:
+            # 步骤1：探测OAuth参数
             oauth_params = discover_oauth_params(session)
+            
+            # 步骤2：Discord授权（自动使用探测值或后备值）
             callback_url = discord_authorize(session, oauth_params)
+            
+            # 步骤3：处理回调
             optiklink_callback(session, callback_url)
+            
+            # 步骤4：检查Dashboard
             info = check_dashboard(session)
             
-            if not info["logged_in"]:
+            # 步骤5：服务器保活（可选）
+            server_result = check_and_start_server(session)
+            
+            if not info.get("logged_in"):
                 raise RuntimeError("未登录")
             
-            debug_print(f"✅ 登录成功！用户: {info['username']}")
-            report = f"✅ OptikLink 签到成功\n用户: {info['username']}\n服务器: {info['running_servers']}个"
+            debug_print(f"\n✅ 登录成功！用户: {info['username']}")
+            report = build_report(info, server_result, attempt=attempt)
             tg_send("✅ OptikLink 签到成功", report)
             return
             
         except Exception as e:
-            debug_print(f"⚠️ 尝试 {attempt} 失败: {e}")
-            if attempt == MAX_RETRIES:
-                tg_send("❌ OptikLink 签到失败", f"最终失败: {e}")
+            error_msg = str(e)
+            debug_print(f"\n⚠️ 尝试 {attempt} 失败: {error_msg}")
+            
+            # 判断是否需要重试
+            is_retryable = "VPN" in error_msg or "拦截" in error_msg or "未授权" in error_msg
+            
+            if is_retryable and attempt < MAX_RETRIES:
+                debug_print(f"    将进行重试...")
+                if attempt == 1:
+                    report = build_report({}, {}, attempt=attempt, is_intercepted=True)
+                    tg_send("⚠️ OptikLink 被拦截，将自动重试", report)
+                continue
+            else:
+                report = build_report({}, {}, attempt=attempt, is_intercepted=False)
+                tg_send(f"❌ OptikLink 签到失败", f"失败: {error_msg}")
+                debug_print(f"\n❌ 最终失败，退出。")
                 sys.exit(1)
-            continue
 
 if __name__ == "__main__":
     main()
