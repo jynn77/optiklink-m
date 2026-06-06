@@ -424,10 +424,11 @@ def build_report(info, server_result, attempt=1, is_intercepted=False):
         f"## OptikLink 自动登录报告 (尝试 {attempt})",
         f"**状态**: {status}",
         f"**用户名**: {info.get('username', 'N/A')}",
-        f"**运行服务器**: {info.get('running_servers', 'N/A')} 个",
+       
         f"**服务到期**: {info.get('expire_date', EXPIRE_DATE_RAW or '未设置')}",
         f"**执行时间**: {now.strftime('%Y-%m-%d %H:%M:%S')} UTC",
     ]
+    # f"**运行服务器**: {info.get('running_servers', 'N/A')} 个",
     
     if is_intercepted:
         lines.append("\n⚠️ 本次尝试被拦截，将自动重试")
