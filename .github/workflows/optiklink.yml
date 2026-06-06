@@ -73,7 +73,7 @@ jobs:
           EXPIRE_DATE:         ${{ secrets.EXPIRE_DATE }}
           PROXY_URL:           "socks5://127.0.0.1:10808"
           # 定时触发时 input 为空，默认不录屏
-          ENABLE_SCREENRECORD: ${{ github.event.inputs.enable_recording || 'false' }}
+          ENABLE_SCREENRECORD: ${{ (github.event_name == 'schedule' && 'false') || (github.event.inputs.enable_recording == 'true' && 'true') || 'false' }}
           DISPLAY:             ":99"
           LIBGL_ALWAYS_SOFTWARE: "1"
           GALLIUM_DRIVER:      "llvmpipe"
