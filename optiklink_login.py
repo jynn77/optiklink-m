@@ -19,6 +19,13 @@ import signal
 from datetime import datetime, timezone
 from urllib.parse import urlparse, parse_qs, urlencode
 
+# 自定义超时异常
+class TimeoutError(Exception):
+    pass
+
+def timeout_handler(signum, frame):
+    raise TimeoutError("操作超时")
+
 # 强制刷新输出缓冲区的打印函数
 def debug_print(msg):
     print(msg)
@@ -62,13 +69,6 @@ HEADERS_BROWSER = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
-# 自定义超时异常
-class TimeoutError(Exception):
-    pass
-
-def timeout_handler(signum, frame):
-    raise TimeoutError("操作超时")
-
 # ─────────────────────────────────────────────────────────────
 # 工具函数
 # ─────────────────────────────────────────────────────────────
@@ -84,8 +84,6 @@ def mask_url(url: str) -> str:
 
 def create_session():
     """创建带有代理和浏览器头部的会话（带超时保护）"""
-    global USE_CLOUDSCRAPER  # 声明使用全局变量
-    
     debug_print("[信息] 开始创建HTTP会话...")
     
     sess = None
@@ -119,7 +117,6 @@ def create_session():
             signal.alarm(0)
             import requests
             sess = requests.Session()
-            USE_CLOUDSCRAPER = False
     else:
         debug_print("[信息] 使用普通 requests session")
         import requests
