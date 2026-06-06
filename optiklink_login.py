@@ -222,9 +222,6 @@ def discover_oauth_params(session):
         tg_send("⚠️ client_id 已变更", f"旧: {mask(DISCORD_CLIENT_ID,6)}\n新: {mask(new_cid,6)}")
     
     return params
-debug_print(f"    使用的 client_id: {auth_params['client_id']}")
-debug_print(f"    使用的 redirect_uri: {auth_params['redirect_uri']}")
-debug_print(f"    使用的 scope: {auth_params['scope']}")
 
 def discord_authorize(session, oauth_params):
     """Discord授权 - 使用GET请求 + 自动重定向（修复400错误）"""
