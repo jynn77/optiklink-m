@@ -364,15 +364,40 @@ def check_dashboard(session):
     
     if "vpn" in html.lower() and "error" in html.lower():
         raise RuntimeError("访问被拦截")
-    
+ # 检查登录状态
     if "DASHBOARD" in html.upper() and "/error/" not in r.url:
         info["logged_in"] = True
+        
+        # 提取用户名
         m = re.search(r'Welcome\s+<[^>]+>([^<]+)</[^>]+>', html, re.I)
         if m:
             info["username"] = m.group(1)
+        
+        # 提取服务器数量
         m2 = re.search(r'(\d+)\s+servers?', html, re.I)
         if m2:
             info["running_servers"] = m2.group(1)
+        
+      # ========== 关键：提取到期日期 ==========
+        # 匹配 "Your servers will be deleted on date: 14.06.2026"
+        patterns = [
+            r'deleted on date:\s*(\d{2}\.\d{2}\.\d{4})',
+            r'expire on:\s*(\d{2}\.\d{2}\.\d{4})',
+            r'expiry date:\s*(\d{2}\.\d{2}\.\d{4})',
+            r'(\d{2}\.\d{2}\.\d{4})',  # 后备：任何 DD.MM.YYYY 格式
+        ]
+        
+        for pattern in date_patterns:
+            m3 = re.search(pattern, html, re.I)
+            if m3:
+                info["expire_date"] = m3.group(1)
+                debug_print(f"    提取到期日期: {info['expire_date']}")
+                break
+        
+        if info["expire_date"] == EXPIRE_DATE_RAW:
+            debug_print(f"    [警告] 未能从页面提取到期日期，使用环境变量值")
+    
+
     
     return info
 
