@@ -4,84 +4,15 @@ on:
   schedule:
     # 使用 cron 表达式，但实际运行时间会随机偏移
     # 基础时间：每天 UTC 00:00（北京时间 08:00）
-    - cron: "0 0 * * *"
+    - cron: '0 1 */3 * *'
   workflow_dispatch:
-    inputs:
-      force_run:
-        description: '强制运行（忽略时间检查）'
-        required: false
-        default: false
-        type: boolean
+    
 
 permissions:
   contents: write
 
 jobs:
-  # 新增：判断今天是否应该运行（每3天一次）
-  check-schedule:
-    runs-on: ubuntu-latest
-    outputs:
-      should_run: ${{ steps.check.outputs.should_run }}
-      random_minute: ${{ steps.random.outputs.random_minute }}
-    steps:
-      - name: 计算基础日期（每3天运行一次）
-        id: check
-        run: |
-          # 获取当前UTC时间的日期
-          CURRENT_EPOCH=$(date -u +%s)
-          # 计算从 2024-01-01 开始的天数
-          DAYS_SINCE_2024=$(( ($CURRENT_EPOCH - 1704067200) / 86400 ))
-          # 每3天运行一次（当余数为0时运行）
-          # 使用 3 天周期
-          if [ $((DAYS_SINCE_2024 % 3)) -eq 0 ]; then
-            echo "should_run=true" >> $GITHUB_OUTPUT
-            echo "今天应该运行（每3天周期）"
-          else
-            echo "should_run=false" >> $GITHUB_OUTPUT
-            echo "今天不是运行日（每3天周期），跳过"
-          fi
-          
-          # workflow_dispatch 强制运行
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ "${{ github.event.inputs.force_run }}" == "true" ]; then
-            echo "should_run=true" >> $GITHUB_OUTPUT
-            echo "强制运行模式已启用"
-          fi
-          
-      - name: 生成随机时间（北京时间 8:00-10:00 之间）
-        id: random
-        if: steps.check.outputs.should_run == 'true'
-        run: |
-          # 生成随机分钟数（0-119 分钟，对应 8:00 到 9:59）
-          # 注意：UTC 时间对应北京时间需要 +8 小时
-          # 北京时间 8:00 = UTC 0:00，北京时间 10:00 = UTC 2:00
-          # 所以随机范围是 UTC 0:00 到 1:59（因为脚本执行需要时间，实际可能在 2:00 前完成）
-          RANDOM_OFFSET=$((RANDOM % 120))
-          RANDOM_HOUR=$((RANDOM_OFFSET / 60))
-          RANDOM_MINUTE=$((RANDOM_OFFSET % 60))
-          
-          echo "random_hour=${RANDOM_HOUR}" >> $GITHUB_OUTPUT
-          echo "random_minute=${RANDOM_MINUTE}" >> $GITHUB_OUTPUT
-          echo "随机时间（UTC）: ${RANDOM_HOUR}:${RANDOM_MINUTE}"
-          echo "对应北京时间: $((RANDOM_HOUR + 8)):${RANDOM_MINUTE}"
-          
-      - name: 等待到随机时间（如果太早）
-        if: steps.check.outputs.should_run == 'true'
-        run: |
-          RANDOM_HOUR=${{ steps.random.outputs.random_hour }}
-          RANDOM_MINUTE=${{ steps.random.outputs.random_minute }}
-          
-          # 计算目标时间戳
-          TARGET_EPOCH=$(date -u -d "${RANDOM_HOUR}:${RANDOM_MINUTE} today" +%s 2>/dev/null || date -u -d "tomorrow ${RANDOM_HOUR}:${RANDOM_MINUTE}" +%s)
-          CURRENT_EPOCH=$(date -u +%s)
-          WAIT_SEC=$((TARGET_EPOCH - CURRENT_EPOCH))
-          
-          if [ $WAIT_SEC -gt 0 ]; then
-            echo "等待 $((WAIT_SEC / 60)) 分钟到 ${RANDOM_HOUR}:${RANDOM_MINUTE} UTC..."
-            sleep $WAIT_SEC
-          fi
-
-
-
+ 
   auto-login:
     runs-on: ubuntu-latest
     timeout-minutes: 20        # 增加到20分钟，适应重试逻辑
@@ -159,7 +90,7 @@ jobs:
           PANEL_URL:            "https://control.optiklink.net"
           SERVER_START_WAIT:    "60"
         run: |
-          python test_discord.py
+       
           python optiklink_login.py
 
       # ----- 自动更新 DISCORD_CLIENT_ID -----
