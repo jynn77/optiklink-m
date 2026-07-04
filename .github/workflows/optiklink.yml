@@ -91,7 +91,7 @@ jobs:
           SERVER_START_WAIT:    "60"
         run: |
        
-          python optiklink_login.py
+          python -u optiklink_login.py
 
       # ----- 自动更新 DISCORD_CLIENT_ID -----
       - name: 自动更新 DISCORD_CLIENT_ID Secret
