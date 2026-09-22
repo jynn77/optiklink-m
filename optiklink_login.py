@@ -213,6 +213,8 @@ TURNSTILE_TOKEN_JS = (
     'var e=document.querySelector(\'input[name="cf-turnstile-response"]\');'
     'return e ? String(e.value) : "";'
 )
+TURNSTILE_MAX_RETRY = 5      # 令牌没放行就再点一次 Turnstile 并重等，最多这些轮
+TURNSTILE_POLL_STEP = 4       # 每轮轮询的等待秒数
 MATH_VALUE_JS = (
     'var e=document.querySelector(\'input[name="math_answer"]\');'
     'return e ? String(e.value) : "";'
@@ -308,14 +310,20 @@ def browser_login(callback_url):
             set_math_answer(sb, answer)
             sb.execute_script("document.querySelector('.cf-turnstile').scrollIntoView({block:'center'})")
             time.sleep(1)
-            sb.uc_gui_click_captcha()
 
+            # 令牌失败就重试：CF 偶发不给放行（今天两次 schedule 都死在这），
+            # 一次拿不到直接 raise 会让整次运行白挂。重试 N 轮，全失败才抛。
             token = ""
-            for _ in range(10):
-                time.sleep(4)
-                token = sb.execute_script(TURNSTILE_TOKEN_JS)
+            for t in range(1, TURNSTILE_MAX_RETRY + 1):
+                sb.uc_gui_click_captcha()
+                for _ in range(10):
+                    time.sleep(TURNSTILE_POLL_STEP)
+                    token = sb.execute_script(TURNSTILE_TOKEN_JS)
+                    if len(token) > 50:
+                        break
                 if len(token) > 50:
                     break
+                print(f"    ⚠️ Turnstile 未放行（第 {t}/{TURNSTILE_MAX_RETRY} 次），再点一次...")
             if len(token) <= 50:
                 raise RuntimeError("Turnstile 令牌未获取")
             print(f"    Turnstile 令牌长度 {len(token)}，提交中...")
