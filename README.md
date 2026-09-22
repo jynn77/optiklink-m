@@ -62,7 +62,7 @@
 
 ## 已知问题
 
-- **Turnstile 令牌偶发拿不到。** Cloudflare 的风险评分每次不同，偶尔一次不放行。脚本会自动重试：令牌没放行就再点一次 `uc_gui_click_captcha()` 并重等，最多 5 轮（`TURNSTILE_MAX_RETRY`）后才报失败。如果连重试都用完仍失败，才会整次运行失败，等 cron 下次补。
+- **Turnstile 令牌偶发拿不到。** Cloudflare 的风险评分每次不同，偶尔一次不放行，会导致该次运行失败，等 cron 下次补。
 - **`提交 time.txt` 步骤写死了 `git push origin HEAD:main`。** 在非 main 分支上手动 dispatch 时，它会尝试把那个分支的代码推到 main。目前靠 fast-forward 拒绝挡住，不炸，但这是个雷。
 
 ## 免责声明
