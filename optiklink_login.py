@@ -442,7 +442,6 @@ def build_report(info, server_result):
         f"## OptikLink 自动登录报告",
         f"**状态**: {status}",
         f"**用户名**: {info['username']}",
-        f"**运行服务器**: {info['running_servers']} 个",
         f"**服务到期**: {info['expire_date']}",
         f"**剩余天数**: {days_left} 天",
         f"**执行时间**: {now.strftime('%Y-%m-%d %H:%M:%S')} UTC",
